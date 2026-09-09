@@ -5,3 +5,7 @@
 *.txt
 _doc/*
 *.log
+.env
+.env.*
+*.session
+*.session-journal
