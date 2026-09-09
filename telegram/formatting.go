@@ -826,9 +826,13 @@ func (r *RichBuilder) Paragraph(text string) *RichBuilder {
 	return r
 }
 
+// Heading appends a heading. Telegram rejects the instant-view heading blocks
+// (pageBlockHeader/Subheader/Title/Subtitle/Kicker) inside rich messages with
+// RICH_MESSAGE_EMPTY or RICH_MESSAGE_BLOCK_UNSUPPORTED, so a heading is encoded
+// as a bold paragraph, which the server accepts.
 func (r *RichBuilder) Heading(text string) *RichBuilder {
 	r.mode = "obj"
-	r.blocks = append(r.blocks, &PageBlockHeader{Text: &TextPlain{Text: text}})
+	r.blocks = append(r.blocks, &PageBlockParagraph{Text: &TextBold{Text: &TextPlain{Text: text}}})
 	return r
 }
 
