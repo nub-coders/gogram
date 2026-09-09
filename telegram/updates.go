@@ -135,6 +135,8 @@ type middlewareManager struct {
 	chatParticipant []func(ChatParticipantHandler) ChatParticipantHandler
 	pollVote        []func(PollVoteHandler) PollVoteHandler
 	poll            []func(PollHandler) PollHandler
+
+	generationStopped []func(GenerationStoppedHandler) GenerationStoppedHandler
 }
 
 func (mm *middlewareManager) Use(middleware Middleware) {
@@ -372,6 +374,15 @@ func (mm *middlewareManager) polls() []func(PollHandler) PollHandler {
 	mm.RLock()
 	defer mm.RUnlock()
 	return slices.Clone(mm.poll)
+}
+
+func (mm *middlewareManager) generationStoppeds() []func(GenerationStoppedHandler) GenerationStoppedHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.generationStopped)
 }
 
 // HandlerGroup represents a group of handlers with shared configuration
@@ -1192,6 +1203,8 @@ type UpdateDispatcher struct {
 	pollVoteHandles        map[int][]*botUpdateHandle[PollVoteHandler]
 	pollHandles            map[int][]*botUpdateHandle[PollHandler]
 
+	generationStoppedHandles map[int][]*botUpdateHandle[GenerationStoppedHandler]
+
 	activeAlbums         map[int64]*albumBox
 	logger               Logger
 	openChats            map[int64]*openChat
@@ -1396,6 +1409,7 @@ func (c *Client) NewUpdateDispatcher(sessionName ...string) {
 		chatParticipantHandles:   make(map[int][]*botUpdateHandle[ChatParticipantHandler]),
 		pollVoteHandles:          make(map[int][]*botUpdateHandle[PollVoteHandler]),
 		pollHandles:              make(map[int][]*botUpdateHandle[PollHandler]),
+		generationStoppedHandles: make(map[int][]*botUpdateHandle[GenerationStoppedHandler]),
 		activeAlbums:             make(map[int64]*albumBox),
 		patternCache:             newPatternCache(),
 		middlewareManager:        &middlewareManager{},
@@ -1518,6 +1532,8 @@ func (c *Client) removeHandle(handle Handle) error {
 		removeHandleFromMap(h, c.dispatcher.pollVoteHandles)
 	case *botUpdateHandle[PollHandler]:
 		removeHandleFromMap(h, c.dispatcher.pollHandles)
+	case *botUpdateHandle[GenerationStoppedHandler]:
+		removeHandleFromMap(h, c.dispatcher.generationStoppedHandles)
 	default:
 		return errors.New("[InvalidHandlerType] handle type not supported")
 	}
@@ -3537,6 +3553,18 @@ func (c *Client) dispatchUpdate(update Update) {
 		go c.handlePollVoteUpdate(upd)
 	case *UpdateMessagePoll:
 		go c.handlePollUpdate(upd)
+	case *UpdateUserTyping:
+		if isStopDraftAction(upd.Action) {
+			go c.handleUserTypingUpdate(upd)
+		}
+	case *UpdateChatUserTyping:
+		if isStopDraftAction(upd.Action) {
+			go c.handleChatTypingUpdate(upd)
+		}
+	case *UpdateChannelUserTyping:
+		if isStopDraftAction(upd.Action) {
+			go c.handleChannelTypingUpdate(upd)
+		}
 	}
 
 	go c.handleRawUpdate(update)

@@ -76,6 +76,8 @@ type Client struct {
 	secretChats    *e2e.SecretChatManager
 	exportedKeys   map[int]*AuthExportedAuthorization
 	exportedKeysMu sync.Mutex
+	liveDrafts     map[int64]*RichDraft
+	draftMu        sync.Mutex
 	Log            Logger
 }
 

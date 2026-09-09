@@ -491,6 +491,59 @@ func (p *PollUpdate) Marshal(noindent ...bool) string {
 	return MarshalWithTypeName(p.OriginalUpdate, noindent...)
 }
 
+// GenerationStopped reports that the peer pressed "stop" on a streaming
+// message draft that was published with CanStop enabled. It corresponds to
+// the Bot API 10.3 MessageGenerationStopped/stopped_message_generation update
+// and is carried over MTProto as sendMessageStopDraftAction inside a typing
+// update.
+//
+// RandomID identifies the draft that was stopped and matches the value used
+// by the RichDraft that published it, so a bot streaming several drafts can
+// tell which one the user interrupted.
+type GenerationStopped struct {
+	Client         *Client
+	OriginalUpdate Update
+
+	RandomID int64
+	// Peer is the chat the draft was being streamed to, and ChatID its id.
+	Peer   Peer
+	ChatID int64
+	// Actor is whoever pressed stop. It matches Peer in private chats and may
+	// be the group itself when an anonymous admin acts.
+	Actor   Peer
+	ActorID int64
+	// UserID and Sender are only set when the actor is a user.
+	UserID   int64
+	Sender   *UserObj
+	Chat     *ChatObj
+	Channel  *Channel
+	TopMsgID int32
+}
+
+// IsPrivate reports whether the stop happened in a private chat.
+func (g *GenerationStopped) IsPrivate() bool {
+	if g == nil {
+		return false
+	}
+	_, ok := g.Peer.(*PeerUser)
+	return ok
+}
+
+// PeerID returns the id of the chat the draft was being streamed to.
+func (g *GenerationStopped) PeerID() int64 {
+	if g == nil {
+		return 0
+	}
+	return g.ChatID
+}
+
+func (g *GenerationStopped) Marshal(noindent ...bool) string {
+	if g == nil || g.OriginalUpdate == nil {
+		return "null"
+	}
+	return MarshalWithTypeName(g.OriginalUpdate, noindent...)
+}
+
 // ---------------------------- Handler Types ----------------------------
 
 type BusinessMessageHandler func(m *BusinessMessage) error
@@ -508,6 +561,7 @@ type StarsSubscriptionHandler func(m *StarsSubscriptionUpdate) error
 type ChatParticipantHandler func(m *ChatParticipantUpdate) error
 type PollVoteHandler func(m *PollVote) error
 type PollHandler func(m *PollUpdate) error
+type GenerationStoppedHandler func(m *GenerationStopped) error
 
 // botUpdateHandle is the generic handle used by every event above. The older
 // handlers each declare their own struct; a single generic type keeps this
@@ -796,6 +850,46 @@ func packPollUpdate(c *Client, u *UpdateMessagePoll) *PollUpdate {
 	}
 }
 
+// isStopDraftAction reports whether a typing action is a generation stop.
+// Typing updates are by far the most frequent updates on the wire, so the
+// dispatcher checks this inline before spawning a goroutine for one.
+func isStopDraftAction(action SendMessageAction) bool {
+	stop, ok := action.(*SendMessageStopDraftAction)
+	return ok && stop != nil
+}
+
+// packGenerationStopped builds a GenerationStopped from any of the three
+// typing updates. Telegram delivers the stop signal as a sendMessageAction, so
+// other action types yield nil and are ignored.
+//
+// peer is the chat the draft was streamed to and actor is whoever pressed
+// stop; they coincide in private chats.
+func packGenerationStopped(c *Client, action SendMessageAction, peer, actor Peer, topMsgID int32, raw Update) *GenerationStopped {
+	stop, ok := action.(*SendMessageStopDraftAction)
+	if !ok || stop == nil {
+		return nil
+	}
+
+	g := &GenerationStopped{
+		Client:         c,
+		OriginalUpdate: raw,
+		RandomID:       stop.RandomID,
+		Peer:           peer,
+		ChatID:         c.GetPeerID(peer),
+		Actor:          actor,
+		ActorID:        c.GetPeerID(actor),
+		Chat:           peerChatFor(c, peer),
+		Channel:        peerChannelFor(c, peer),
+		TopMsgID:       topMsgID,
+	}
+	if p, ok := actor.(*PeerUser); ok {
+		g.UserID = p.UserID
+		g.Sender = senderFor(c, p.UserID)
+	}
+
+	return g
+}
+
 // ---------------------------- Dispatch ----------------------------
 
 // dispatchBotUpdate runs every registered handler for a packed event, mirroring
@@ -935,6 +1029,43 @@ func (c *Client) handlePollUpdate(u *UpdateMessagePoll) {
 		c.dispatcher.middlewareManager.polls(), "[PollHandler]")
 }
 
+// dispatchGenerationStopped notifies any live RichDraft first so that
+// draft.Stopped() flips as soon as the update arrives instead of only after
+// the next draft action is rejected, then runs the registered handlers.
+func (c *Client) dispatchGenerationStopped(g *GenerationStopped) {
+	if g == nil {
+		return
+	}
+	c.markDraftStopped(g.RandomID)
+	dispatchBotUpdate(c, c.dispatcher.generationStoppedHandles, g,
+		func(h GenerationStoppedHandler, m *GenerationStopped) error { return h(m) },
+		c.dispatcher.middlewareManager.generationStoppeds(), "[GenerationStoppedHandler]")
+}
+
+// handleUserTypingUpdate covers private chats, where the typing peer is also
+// the chat the draft was streamed to.
+func (c *Client) handleUserTypingUpdate(u *UpdateUserTyping) {
+	if u == nil {
+		return
+	}
+	peer := &PeerUser{UserID: u.UserID}
+	c.dispatchGenerationStopped(packGenerationStopped(c, u.Action, peer, peer, u.TopMsgID, u))
+}
+
+func (c *Client) handleChatTypingUpdate(u *UpdateChatUserTyping) {
+	if u == nil {
+		return
+	}
+	c.dispatchGenerationStopped(packGenerationStopped(c, u.Action, &PeerChat{ChatID: u.ChatID}, u.FromID, 0, u))
+}
+
+func (c *Client) handleChannelTypingUpdate(u *UpdateChannelUserTyping) {
+	if u == nil {
+		return
+	}
+	c.dispatchGenerationStopped(packGenerationStopped(c, u.Action, &PeerChannel{ChannelID: u.ChannelID}, u.FromID, u.TopMsgID, u))
+}
+
 // ---------------------------- Registration ----------------------------
 
 func addBotUpdateHandle[H any](c *Client, handles map[int][]*botUpdateHandle[H], handler H) Handle {
@@ -1028,4 +1159,14 @@ func (c *Client) OnPollVote(handler PollVoteHandler) Handle {
 // OnPoll registers a handler for poll result updates.
 func (c *Client) OnPoll(handler PollHandler) Handle {
 	return addBotUpdateHandle(c, c.dispatcher.pollHandles, handler)
+}
+
+// OnGenerationStopped registers a handler for the peer stopping a streaming
+// message draft that was published with CanStop enabled (Bot API 10.3
+// stopped_message_generation).
+//
+// A RichDraft created by this client also has its Stopped() flag set before
+// the handler runs, so streaming loops can simply poll draft.Stopped().
+func (c *Client) OnGenerationStopped(handler GenerationStoppedHandler) Handle {
+	return addBotUpdateHandle(c, c.dispatcher.generationStoppedHandles, handler)
 }

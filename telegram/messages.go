@@ -338,7 +338,51 @@ func (c *Client) NewRichDraft(peerID any, opts ...*SendOptions) *RichDraft {
 	if opt.Timeouts > 0 {
 		delay = time.Duration(opt.Timeouts) * time.Millisecond
 	}
-	return &RichDraft{c: c, peer: peerID, opt: opt, delay: delay, randomID: GenRandInt()}
+	d := &RichDraft{c: c, peer: peerID, opt: opt, delay: delay, randomID: GenRandInt()}
+	c.registerDraft(d)
+	return d
+}
+
+// registerDraft tracks a streaming draft by its random ID so an incoming
+// stopped-generation update can mark the right one. Entries are removed by
+// Finalize, or by Release for a draft that is abandoned without finalizing.
+func (c *Client) registerDraft(d *RichDraft) {
+	if c == nil || d == nil {
+		return
+	}
+	c.draftMu.Lock()
+	defer c.draftMu.Unlock()
+	if c.liveDrafts == nil {
+		c.liveDrafts = make(map[int64]*RichDraft)
+	}
+	c.liveDrafts[d.randomID] = d
+}
+
+// releaseDraft stops tracking a draft. Safe to call more than once.
+func (c *Client) releaseDraft(randomID int64) {
+	if c == nil {
+		return
+	}
+	c.draftMu.Lock()
+	defer c.draftMu.Unlock()
+	delete(c.liveDrafts, randomID)
+}
+
+// markDraftStopped flags the draft with the given random ID as stopped. It is
+// called from the update dispatcher when the peer aborts generation.
+func (c *Client) markDraftStopped(randomID int64) {
+	if c == nil || randomID == 0 {
+		return
+	}
+	c.draftMu.Lock()
+	d := c.liveDrafts[randomID]
+	c.draftMu.Unlock()
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.stopped = true
+	d.mu.Unlock()
 }
 
 // CanStop marks the streaming draft as interruptible, letting the peer
@@ -365,7 +409,8 @@ func (d *RichDraft) KeepOnStop(v bool) *RichDraft {
 }
 
 // Stopped reports whether the peer requested that generation be stopped.
-// It is set when the server rejects a draft action for a cancelled stream.
+// It is set as soon as a stopped-generation update arrives for this draft,
+// and also when the server rejects a draft action for a cancelled stream.
 func (d *RichDraft) Stopped() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -459,6 +504,7 @@ func (d *RichDraft) Update(msg *RichBuilder) error {
 }
 
 func (d *RichDraft) Finalize(msg *RichBuilder) (*NewMessage, error) {
+	defer d.c.releaseDraft(d.randomID)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if msg == nil {
@@ -494,6 +540,16 @@ func (d *RichDraft) Message() *NewMessage {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.sent
+}
+
+// Release stops tracking the draft for stopped-generation updates. Finalize
+// does this automatically; call it explicitly only when abandoning a draft
+// without finalizing it.
+func (d *RichDraft) Release() {
+	if d == nil {
+		return
+	}
+	d.c.releaseDraft(d.randomID)
 }
 
 func (c *Client) StreamRich(peerID any, streamer func(update func(*RichBuilder) error), opts ...*SendOptions) (*NewMessage, error) {
