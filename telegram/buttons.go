@@ -10,10 +10,14 @@ type ButtonBuilder struct{}
 
 var Button = ButtonBuilder{}
 
-type KeyboardBuilder struct{ rows []*KeyboardInlineButtonRow }
+type KeyboardBuilder struct {
+	rows       []*KeyboardInlineButtonRow
+	forceReply bool
+}
 type ReplyKeyboardBuilder struct{ rows []*KeyboardButtonRow }
 type BuildReplyOptions struct {
 	ResizeKeyboard, OneTime, Selective, Persistent bool
+	ForceReply                                     bool
 	Placeholder                                    string
 }
 
@@ -56,7 +60,17 @@ func (k *KeyboardBuilder) grid(n int, b ...KeyboardInlineButton) *KeyboardBuilde
 	}
 	return k
 }
-func (k *KeyboardBuilder) Build() *ReplyInlineMarkup { return &ReplyInlineMarkup{Rows: k.rows} }
+
+// ForceReply forces the user's client to open a reply interface for the
+// message this keyboard is attached to.
+func (k *KeyboardBuilder) ForceReply() *KeyboardBuilder {
+	k.forceReply = true
+	return k
+}
+
+func (k *KeyboardBuilder) Build() *ReplyInlineMarkup {
+	return &ReplyInlineMarkup{Rows: k.rows, ForceReply: k.forceReply}
+}
 func (k *ReplyKeyboardBuilder) AddRow(b ...KeyboardButton) *ReplyKeyboardBuilder {
 	p := make([]*KeyboardButton, len(b))
 	for i := range b {
@@ -67,7 +81,7 @@ func (k *ReplyKeyboardBuilder) AddRow(b ...KeyboardButton) *ReplyKeyboardBuilder
 }
 func (k *ReplyKeyboardBuilder) Build(o ...BuildReplyOptions) *ReplyKeyboardMarkup {
 	v := getVariadic(o, BuildReplyOptions{})
-	return &ReplyKeyboardMarkup{Resize: v.ResizeKeyboard, SingleUse: v.OneTime, Selective: v.Selective, Persistent: v.Persistent, Placeholder: v.Placeholder, Rows: k.rows}
+	return &ReplyKeyboardMarkup{Resize: v.ResizeKeyboard, SingleUse: v.OneTime, Selective: v.Selective, Persistent: v.Persistent, ForceReply: v.ForceReply, Placeholder: v.Placeholder, Rows: k.rows}
 }
 
 func (ButtonBuilder) Data(t, d string) KeyboardInlineButton {
@@ -90,6 +104,47 @@ func (ButtonBuilder) Buy(t string) KeyboardInlineButton {
 }
 func (ButtonBuilder) Copy(t, c string) KeyboardInlineButton {
 	return KeyboardInlineButton{Text: t, Type: &InlineButtonTypeCopy{CopyText: c}}
+}
+
+// Disabled returns a greyed-out, non-interactive button. Tapping it does
+// nothing, which is useful for placeholders and layout spacing.
+func (ButtonBuilder) Disabled(t string) KeyboardInlineButton {
+	return KeyboardInlineButton{Text: t, Type: &InlineButtonTypeDisabled{}}
+}
+
+// ButtonStyle describes the optional appearance of a keyboard button.
+// The three background colors are mutually exclusive; if more than one is
+// set, Telegram applies the first in the order primary, danger, success.
+type ButtonStyle struct {
+	Primary bool  // Accent-colored background
+	Danger  bool  // Destructive (red) background
+	Success bool  // Affirmative (green) background
+	Icon    int64 // Custom emoji ID shown on the button
+}
+
+func (s *ButtonStyle) inline() *KeyboardButtonStyle {
+	if s == nil {
+		return nil
+	}
+	return &KeyboardButtonStyle{
+		BgPrimary: s.Primary,
+		BgDanger:  s.Danger,
+		BgSuccess: s.Success,
+		Icon:      s.Icon,
+	}
+}
+
+// Styled applies a style to an inline button, returning it for chaining:
+//
+//	telegram.Button.Styled(telegram.Button.Data("Delete", "rm"), &telegram.ButtonStyle{Danger: true})
+func (ButtonBuilder) Styled(b KeyboardInlineButton, s *ButtonStyle) KeyboardInlineButton {
+	b.Style = s.inline()
+	return b
+}
+
+// StyledText returns a reply-keyboard text button with the given style.
+func (ButtonBuilder) StyledText(t string, s *ButtonStyle) KeyboardButton {
+	return KeyboardButton{Text: t, Type: &ButtonTypeDefault{}, Style: s.inline()}
 }
 func (ButtonBuilder) Text(t string) KeyboardButton {
 	return KeyboardButton{Text: t, Type: &ButtonTypeDefault{}}

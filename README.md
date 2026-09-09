@@ -98,7 +98,7 @@ If you'd like to support Gogram, you can consider:
   <li><strong>up-to-date</strong>: 🔄 gogram is always in sync with the latest telegram api changes and additions (<code>tl-parser</code> is used to generate the api layer).</li>
 </ul>
 
-#### Current Layer - **unknown** (Updated on 2026-03-05)
+#### Current Layer - **229** (Updated on 2026-09-08)
 
 ## doing stuff
 
@@ -170,7 +170,7 @@ For more examples, check the **[examples](examples)** directory.
 
 ## features
 
-- [x] basic mtproto implementation (layer 184)
+- [x] basic mtproto implementation (layer 229)
 - [x] updates handling system + cache
 - [x] html, markdown parsing, friendly methods
 - [x] support for flag2.0, layer 147

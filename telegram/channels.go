@@ -561,9 +561,117 @@ func (b *AdminBuilder) WithRank(rank string) *AdminBuilder {
 	return b
 }
 
+// mut returns the builder's rights struct, allocating it on first use so the
+// granular toggles below can be chained without a prior WithRights call.
+func (b *AdminBuilder) mut() *ChatAdminRights {
+	if b.rights == nil {
+		b.rights = &ChatAdminRights{}
+	}
+	return b.rights
+}
+
+func (b *AdminBuilder) CanChangeInfo(v bool) *AdminBuilder {
+	b.mut().ChangeInfo = v
+	return b
+}
+
+func (b *AdminBuilder) CanPostMessages(v bool) *AdminBuilder {
+	b.mut().PostMessages = v
+	return b
+}
+
+func (b *AdminBuilder) CanEditMessages(v bool) *AdminBuilder {
+	b.mut().EditMessages = v
+	return b
+}
+
+func (b *AdminBuilder) CanDeleteMessages(v bool) *AdminBuilder {
+	b.mut().DeleteMessages = v
+	return b
+}
+
+func (b *AdminBuilder) CanBanUsers(v bool) *AdminBuilder {
+	b.mut().BanUsers = v
+	return b
+}
+
+func (b *AdminBuilder) CanInviteUsers(v bool) *AdminBuilder {
+	b.mut().InviteUsers = v
+	return b
+}
+
+func (b *AdminBuilder) CanPinMessages(v bool) *AdminBuilder {
+	b.mut().PinMessages = v
+	return b
+}
+
+func (b *AdminBuilder) CanAddAdmins(v bool) *AdminBuilder {
+	b.mut().AddAdmins = v
+	return b
+}
+
+func (b *AdminBuilder) Anonymous(v bool) *AdminBuilder {
+	b.mut().Anonymous = v
+	return b
+}
+
+func (b *AdminBuilder) CanManageCall(v bool) *AdminBuilder {
+	b.mut().ManageCall = v
+	return b
+}
+
+func (b *AdminBuilder) CanManageTopics(v bool) *AdminBuilder {
+	b.mut().ManageTopics = v
+	return b
+}
+
+func (b *AdminBuilder) CanPostStories(v bool) *AdminBuilder {
+	b.mut().PostStories = v
+	return b
+}
+
+func (b *AdminBuilder) CanEditStories(v bool) *AdminBuilder {
+	b.mut().EditStories = v
+	return b
+}
+
+func (b *AdminBuilder) CanDeleteStories(v bool) *AdminBuilder {
+	b.mut().DeleteStories = v
+	return b
+}
+
+func (b *AdminBuilder) CanManageDirectMessages(v bool) *AdminBuilder {
+	b.mut().ManageDirectMessages = v
+	return b
+}
+
+func (b *AdminBuilder) CanManageRanks(v bool) *AdminBuilder {
+	b.mut().ManageRanks = v
+	return b
+}
+
+func (b *AdminBuilder) CanManageLinkedPeers(v bool) *AdminBuilder {
+	b.mut().ManageLinkedPeers = v
+	return b
+}
+
+// CanManageWelcomeMessages grants the admin permission to configure the
+// chat's welcome messages. Maps to chatAdminRights.manage_welcome_messages
+// (Bot API 10.3 can_send_welcome_messages).
+func (b *AdminBuilder) CanManageWelcomeMessages(v bool) *AdminBuilder {
+	b.mut().ManageWelcomeMessages = v
+	return b
+}
+
+// Other grants the residual "other" admin right.
+func (b *AdminBuilder) Other(v bool) *AdminBuilder {
+	b.mut().Other = v
+	return b
+}
+
 func (b *AdminBuilder) Promote() (bool, error) {
 	b.isAdmin = true
-	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{IsAdmin: true, Rights: b.rights, Rank: b.rank})
+	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{IsAdmin: true, Rights: b.mut(), Rank: b.rank})
 }
 
 func (b *AdminBuilder) Demote() (bool, error) {
@@ -572,7 +680,7 @@ func (b *AdminBuilder) Demote() (bool, error) {
 }
 
 func (b *AdminBuilder) Invoke() (bool, error) {
-	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{Rights: b.rights, Rank: b.rank})
+	return b.client.EditAdmin(b.chatID, b.userID, &AdminOptions{Rights: b.mut(), Rank: b.rank})
 }
 
 type BannedOptions struct {

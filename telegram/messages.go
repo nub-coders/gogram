@@ -318,14 +318,18 @@ func (c *Client) EditRich(peerID any, messageID int32, msg *RichBuilder, opts ..
 }
 
 type RichDraft struct {
-	c        *Client
-	peer     any
-	opt      *SendOptions
-	sent     *NewMessage
-	last     time.Time
-	delay    time.Duration
-	mu       sync.Mutex
-	finalErr error
+	c          *Client
+	peer       any
+	opt        *SendOptions
+	sent       *NewMessage
+	last       time.Time
+	delay      time.Duration
+	mu         sync.Mutex
+	finalErr   error
+	randomID   int64
+	canStop    bool
+	keepOnStop bool
+	stopped    bool
 }
 
 func (c *Client) NewRichDraft(peerID any, opts ...*SendOptions) *RichDraft {
@@ -334,7 +338,90 @@ func (c *Client) NewRichDraft(peerID any, opts ...*SendOptions) *RichDraft {
 	if opt.Timeouts > 0 {
 		delay = time.Duration(opt.Timeouts) * time.Millisecond
 	}
-	return &RichDraft{c: c, peer: peerID, opt: opt, delay: delay}
+	return &RichDraft{c: c, peer: peerID, opt: opt, delay: delay, randomID: GenRandInt()}
+}
+
+// CanStop marks the streaming draft as interruptible, letting the peer
+// abort generation from their client. Maps to
+// inputSendMessageRichMessageDraftAction.can_stop (Bot API 10.3).
+//
+// Must be called before the first Preview/Update call to take effect on
+// every emitted action.
+func (d *RichDraft) CanStop(v bool) *RichDraft {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.canStop = v
+	return d
+}
+
+// KeepOnStop keeps the partially generated draft visible when the peer
+// stops generation, instead of discarding it. Maps to
+// inputSendMessageRichMessageDraftAction.keep_on_stop (Bot API 10.3).
+func (d *RichDraft) KeepOnStop(v bool) *RichDraft {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.keepOnStop = v
+	return d
+}
+
+// Stopped reports whether the peer requested that generation be stopped.
+// It is set when the server rejects a draft action for a cancelled stream.
+func (d *RichDraft) Stopped() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.stopped
+}
+
+// draftAction publishes the in-progress rich message as a live draft typing
+// action, so the recipient sees it render incrementally before it is sent.
+func (d *RichDraft) draftAction(msg *RichBuilder) error {
+	if msg == nil {
+		return fmt.Errorf("rich message is nil")
+	}
+	if err := msg.resolve(d.c); err != nil {
+		return err
+	}
+	peer, err := d.c.ResolvePeer(d.peer)
+	if err != nil {
+		return err
+	}
+	var topMsgID int32
+	if d.opt != nil {
+		topMsgID = d.opt.TopicID
+	}
+	_, err = d.c.MessagesSetTyping(peer, topMsgID, &InputSendMessageRichMessageDraftAction{
+		CanStop:     d.canStop,
+		KeepOnStop:  d.keepOnStop,
+		RandomID:    d.randomID,
+		RichMessage: msg.Build(),
+	})
+	if err != nil {
+		if MatchError(err, "MESSAGE_GENERATION_STOPPED") {
+			d.stopped = true
+		}
+		return err
+	}
+	return nil
+}
+
+// Preview streams the current state of the rich message to the peer as a
+// live draft without sending a real message. Rate-limited by the same delay
+// as Update. Unlike Update, no message is created until Finalize is called.
+func (d *RichDraft) Preview(msg *RichBuilder) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopped {
+		return nil
+	}
+	if !d.last.IsZero() && time.Since(d.last) < d.delay {
+		return nil
+	}
+	if err := d.draftAction(msg); err != nil {
+		d.finalErr = err
+		return err
+	}
+	d.last = time.Now()
+	return nil
 }
 
 func (d *RichDraft) Update(msg *RichBuilder) error {
@@ -342,6 +429,9 @@ func (d *RichDraft) Update(msg *RichBuilder) error {
 	defer d.mu.Unlock()
 	if msg == nil {
 		return fmt.Errorf("rich message is nil")
+	}
+	if d.stopped {
+		return nil
 	}
 	if d.sent == nil {
 		sent, err := d.c.SendRich(d.peer, msg, d.opt)
@@ -374,6 +464,14 @@ func (d *RichDraft) Finalize(msg *RichBuilder) (*NewMessage, error) {
 	if msg == nil {
 		return d.sent, d.finalErr
 	}
+	// Generation was stopped by the peer. Honour keep_on_stop: retain whatever
+	// was already delivered, but do not push further content.
+	if d.stopped {
+		if d.keepOnStop {
+			return d.sent, d.finalErr
+		}
+		return nil, d.finalErr
+	}
 	if d.sent == nil {
 		sent, err := d.c.SendRich(d.peer, msg, d.opt)
 		if err != nil {
@@ -402,6 +500,56 @@ func (c *Client) StreamRich(peerID any, streamer func(update func(*RichBuilder) 
 	draft := c.NewRichDraft(peerID, opts...)
 	streamer(draft.Update)
 	return draft.Finalize(nil)
+}
+
+// StreamRichPreview streams a rich message to the peer as a live typing draft
+// (Bot API 10.3), then commits it as a real message once the streamer returns.
+//
+// Unlike StreamRich, no message exists in the chat until the stream finishes,
+// so intermediate states never persist in history. The stream is marked
+// interruptible (can_stop): the recipient may stop generation, after which the
+// partial message is discarded. To keep the partial message on stop, or to
+// otherwise configure the draft, use StreamRichPreviewWith.
+func (c *Client) StreamRichPreview(peerID any, streamer func(preview func(*RichBuilder) error) *RichBuilder, opts ...*SendOptions) (*NewMessage, error) {
+	return c.StreamRichPreviewWith(peerID, &RichStreamOptions{Send: getVariadic(opts, &SendOptions{}), CanStop: true},
+		func(d *RichDraft) *RichBuilder {
+			return streamer(d.Preview)
+		})
+}
+
+// RichStreamOptions configures a StreamRichPreviewWith session.
+type RichStreamOptions struct {
+	Send       *SendOptions // Send/edit options and stream delay (via Send.Timeouts)
+	CanStop    bool         // Allow the recipient to stop generation
+	KeepOnStop bool         // Keep the partial message if generation is stopped
+}
+
+// StreamRichPreviewWith is the configurable form of StreamRichPreview. The
+// streamer receives the live *RichDraft so it can push previews via
+// draft.Preview, observe draft.Stopped(), and return the final RichBuilder to
+// commit. Returning nil commits nothing new: the last previewed content (if
+// any) is finalized instead.
+//
+//	client.StreamRichPreviewWith(peer, &telegram.RichStreamOptions{CanStop: true, KeepOnStop: true},
+//	    func(d *telegram.RichDraft) *telegram.RichBuilder {
+//	        for token := range tokens {
+//	            if d.Stopped() { break }
+//	            _ = d.Preview(buildSoFar())
+//	        }
+//	        return buildFinal()
+//	    })
+func (c *Client) StreamRichPreviewWith(peerID any, opts *RichStreamOptions, streamer func(draft *RichDraft) *RichBuilder) (*NewMessage, error) {
+	if streamer == nil {
+		return nil, fmt.Errorf("streamer is nil")
+	}
+	if opts == nil {
+		opts = &RichStreamOptions{}
+	}
+	draft := c.NewRichDraft(peerID, opts.Send)
+	draft.CanStop(opts.CanStop)
+	draft.KeepOnStop(opts.KeepOnStop)
+	final := streamer(draft)
+	return draft.Finalize(final)
 }
 
 func (c *Client) sendMessage(Peer InputPeer, Message string, entities []MessageEntity, sendAs InputPeer, opt *SendOptions) (*NewMessage, error) {

@@ -706,6 +706,7 @@ type pendingAttach struct {
 	upload   *UploadOptions
 	mimeType string
 	fileName string
+	caption  string
 }
 
 func NewRichMessage() *RichBuilder {
@@ -887,6 +888,7 @@ type TableOptions struct {
 	Title    any
 	Bordered bool
 	Striped  bool
+	Compact  bool // Render with reduced padding
 	Header   bool // first row is a header row
 }
 
@@ -909,6 +911,7 @@ func (r *RichBuilder) Table(rows [][]any, opts ...*TableOptions) *RichBuilder {
 	r.blocks = append(r.blocks, &PageBlockTable{
 		Bordered: opt.Bordered,
 		Striped:  opt.Striped,
+		Compact:  opt.Compact,
 		Title:    title,
 		Rows:     tableRows,
 	})
@@ -924,6 +927,117 @@ func (r *RichBuilder) Details(title any, blocks ...PageBlock) *RichBuilder {
 func (r *RichBuilder) Quote(text any) *RichBuilder {
 	r.mode = "obj"
 	r.blocks = append(r.blocks, &PageBlockPullquote{Text: toRich(text), Caption: &TextEmpty{}})
+	return r
+}
+
+// Blockquote appends a block quotation.
+func (r *RichBuilder) Blockquote(text any) *RichBuilder {
+	r.mode = "obj"
+	r.blocks = append(r.blocks, &PageBlockBlockquote{Text: toRich(text), Caption: &TextEmpty{}})
+	return r
+}
+
+// ExpandableQuote appends a block quotation that renders collapsed and can be
+// expanded by the user.
+func (r *RichBuilder) ExpandableQuote(text any) *RichBuilder {
+	r.mode = "obj"
+	r.blocks = append(r.blocks, &PageBlockBlockquote{
+		Collapsed: true,
+		Text:      toRich(text),
+		Caption:   &TextEmpty{},
+	})
+	return r
+}
+
+// RichButtonAlign controls the horizontal alignment of a button row.
+type RichButtonAlign int
+
+const (
+	RichButtonAlignLeft RichButtonAlign = iota
+	RichButtonAlignCenter
+	RichButtonAlignRight
+)
+
+// RichButton is a single button inside a rich message button row.
+type RichButton struct {
+	Text  any              // Button label: string or RichText
+	Type  InlineButtonType // Button behavior; defaults to a disabled button
+	Style *RichButtonStyle // Optional appearance
+}
+
+// RichURLButton returns a button that opens a URL.
+func RichURLButton(text any, url string) RichButton {
+	return RichButton{Text: text, Type: &InlineButtonTypeURL{URL: url}}
+}
+
+// RichCallbackButton returns a button that sends callback data to the bot.
+func RichCallbackButton(text any, data string) RichButton {
+	return RichButton{Text: text, Type: &InlineButtonTypeCallback{Data: []byte(data)}}
+}
+
+// RichCopyButton returns a button that copies text to the clipboard.
+func RichCopyButton(text any, copyText string) RichButton {
+	return RichButton{Text: text, Type: &InlineButtonTypeCopy{CopyText: copyText}}
+}
+
+// Buttons appends a row of buttons to the rich message.
+func (r *RichBuilder) Buttons(buttons ...RichButton) *RichBuilder {
+	return r.buttonRow(RichButtonAlignLeft, buttons)
+}
+
+// ButtonsAligned appends a row of buttons with explicit alignment.
+func (r *RichBuilder) ButtonsAligned(align RichButtonAlign, buttons ...RichButton) *RichBuilder {
+	return r.buttonRow(align, buttons)
+}
+
+func (r *RichBuilder) buttonRow(align RichButtonAlign, buttons []RichButton) *RichBuilder {
+	if len(buttons) == 0 {
+		return r
+	}
+	packed := make([]*PageButton, 0, len(buttons))
+	for _, b := range buttons {
+		btype := b.Type
+		if btype == nil {
+			btype = &InlineButtonTypeDisabled{}
+		}
+		packed = append(packed, &PageButton{Text: toRich(b.Text), Type: btype, Style: b.Style})
+	}
+	row := &PageBlockButtonRow{Buttons: packed}
+	switch align {
+	case RichButtonAlignCenter:
+		row.AlignCenter = true
+	case RichButtonAlignRight:
+		row.AlignRight = true
+	default:
+		row.AlignLeft = true
+	}
+	r.mode = "obj"
+	r.blocks = append(r.blocks, row)
+	return r
+}
+
+// DocumentBlock appends a file block backed by an already-uploaded document.
+// Use AddDocumentBlock to upload and attach in one step.
+func (r *RichBuilder) DocumentBlock(doc InputDocument, caption string) *RichBuilder {
+	r.docs = append(r.docs, doc)
+	r.mode = "obj"
+	r.blocks = append(r.blocks, &PageBlockDocument{
+		DocumentID: documentID(doc),
+		Caption:    &PageCaption{Text: &TextPlain{Text: caption}, Credit: &TextEmpty{}},
+	})
+	return r
+}
+
+// AddDocumentBlock uploads source and appends it as a file block. The block is
+// materialized during resolve, once the document ID is known.
+func (r *RichBuilder) AddDocumentBlock(source any, caption string, opts ...*UploadOptions) *RichBuilder {
+	r.mode = "obj"
+	r.pending = append(r.pending, &pendingAttach{
+		kind:    "document-block",
+		source:  source,
+		upload:  getVariadic(opts, (*UploadOptions)(nil)),
+		caption: caption,
+	})
 	return r
 }
 
@@ -972,12 +1086,15 @@ func (r *RichBuilder) resolve(c *Client) error {
 			} else {
 				return fmt.Errorf("attach photo: not a photo (got %T)", media)
 			}
-		case "document":
+		case "document", "document-block":
 			if p.source == nil {
 				continue
 			}
 			if dc, ok := p.source.(InputDocument); ok {
 				r.docs = append(r.docs, dc)
+				if p.kind == "document-block" {
+					r.appendDocumentBlock(documentID(dc), p.caption)
+				}
 				continue
 			}
 			media, err := c.GetSendableMedia(p.source, &MediaMetadata{
@@ -991,6 +1108,9 @@ func (r *RichBuilder) resolve(c *Client) error {
 			}
 			if md, ok := media.(*InputMediaDocument); ok {
 				r.docs = append(r.docs, md.ID)
+				if p.kind == "document-block" {
+					r.appendDocumentBlock(documentID(md.ID), p.caption)
+				}
 			} else {
 				return fmt.Errorf("attach document: not a document (got %T)", media)
 			}
@@ -1011,6 +1131,13 @@ func (r *RichBuilder) resolve(c *Client) error {
 }
 
 func (r *RichBuilder) Build() InputRichMessage { return r.build() }
+
+func (r *RichBuilder) appendDocumentBlock(id int64, caption string) {
+	r.blocks = append(r.blocks, &PageBlockDocument{
+		DocumentID: id,
+		Caption:    &PageCaption{Text: &TextPlain{Text: caption}, Credit: &TextEmpty{}},
+	})
+}
 
 func (r *RichBuilder) build() InputRichMessage {
 	switch r.mode {

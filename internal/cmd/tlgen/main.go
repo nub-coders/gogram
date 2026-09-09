@@ -387,7 +387,9 @@ func minorFixes(outdir, layer string) {
 		}
 
 		// #### Current Layer - **174** (Updated on 2024-02-18)
-		reg = regexp.MustCompile(`#### Current Layer - \*\*\d+\*\* \(Updated on \d{4}-\d{2}-\d{2}\)`)
+		// tolerate a non-numeric layer (e.g. "unknown") so a previously botched
+		// write still gets repaired instead of being skipped forever.
+		reg = regexp.MustCompile(`#### Current Layer - \*\*[^*]+\*\* \(Updated on [^)]+\)`)
 		str = string(rdcontent)
 
 		str = reg.ReplaceAllString(str, "#### Current Layer - **"+layer+"** (Updated on "+time.Now().Format("2006-01-02")+")")
@@ -537,13 +539,13 @@ help.configSimple#5a592a6c date:int expires:int rules:Vector<AccessPointRule> = 
 
 		clean = []string{`boolFalse#bc799737 = Bool;
 boolTrue#997275b5 = Bool;
-	
+
 true#3fedd339 = True;
-	
+
 vector#1cb5c415 {t:Type} # [ t ] = Vector t;
-	
+
 error#c4b9f9bb code:int text:string = Error;
-	
+
 null#56730bcc = Null;`}
 	} else {
 		clean = []string{}

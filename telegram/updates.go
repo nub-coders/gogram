@@ -40,6 +40,11 @@ const (
 	EventAction         EventType = "action"
 	EventRaw            EventType = "raw"
 
+	EventEphemeralMessage  EventType = "ephemeralmessage"
+	EventEphemeralEdit     EventType = "ephemeraledit"
+	EventEphemeralDelete   EventType = "ephemeraldelete"
+	EventEphemeralCallback EventType = "ephemeralcallback"
+
 	OnMessage        = EventMessage
 	OnCommand        = EventCommand
 	OnCommandShort   = EventCommandShort
@@ -61,6 +66,11 @@ const (
 	OnInlineQuery         = EventInlineQuery
 	OnCallbackQuery       = EventCallbackQuery
 	OnInlineCallbackQuery = EventInlineCallback
+
+	OnEphemeralMessage  = EventEphemeralMessage
+	OnEphemeralEdit     = EventEphemeralEdit
+	OnEphemeralDelete   = EventEphemeralDelete
+	OnEphemeralCallback = EventEphemeralCallback
 )
 
 type Middleware = func(MessageHandler) MessageHandler
@@ -104,6 +114,11 @@ type middlewareManager struct {
 	participant    []func(ParticipantHandler) ParticipantHandler
 	joinRequest    []func(PendingJoinHandler) PendingJoinHandler
 	raw            []func(RawHandler) RawHandler
+
+	ephemeralMessage  []func(EphemeralMessageHandler) EphemeralMessageHandler
+	ephemeralEdit     []func(EphemeralEditHandler) EphemeralEditHandler
+	ephemeralDelete   []func(EphemeralDeleteHandler) EphemeralDeleteHandler
+	ephemeralCallback []func(EphemeralCallbackHandler) EphemeralCallbackHandler
 }
 
 func (mm *middlewareManager) Use(middleware Middleware) {
@@ -182,6 +197,30 @@ func (mm *middlewareManager) raws() []func(RawHandler) RawHandler {
 	mm.RLock()
 	defer mm.RUnlock()
 	return slices.Clone(mm.raw)
+}
+
+func (mm *middlewareManager) ephemeralMessages() []func(EphemeralMessageHandler) EphemeralMessageHandler {
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.ephemeralMessage)
+}
+
+func (mm *middlewareManager) ephemeralEdits() []func(EphemeralEditHandler) EphemeralEditHandler {
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.ephemeralEdit)
+}
+
+func (mm *middlewareManager) ephemeralDeletes() []func(EphemeralDeleteHandler) EphemeralDeleteHandler {
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.ephemeralDelete)
+}
+
+func (mm *middlewareManager) ephemeralCallbacks() []func(EphemeralCallbackHandler) EphemeralCallbackHandler {
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.ephemeralCallback)
 }
 
 // HandlerGroup represents a group of handlers with shared configuration
@@ -711,6 +750,11 @@ type PendingJoinHandler func(m *JoinRequestUpdate) error
 type RawHandler func(m Update, c *Client) error
 type E2EHandler func(update Update, c *Client) error
 
+type EphemeralMessageHandler func(m *EphemeralMessageEvent) error
+type EphemeralEditHandler func(m *EphemeralMessageEvent) error
+type EphemeralDeleteHandler func(m *EphemeralDeleteMessage) error
+type EphemeralCallbackHandler func(m *EphemeralCallbackQuery) error
+
 var ErrEndGroup = errors.New("[EndGroup] end of handler propagation")
 
 const (
@@ -844,6 +888,32 @@ type rawHandle struct {
 	Handler      RawHandler
 }
 
+type ephemeralMessageHandle struct {
+	baseHandle
+	Pattern any
+	Handler EphemeralMessageHandler
+	Filters []Filter
+}
+
+type ephemeralEditHandle struct {
+	baseHandle
+	Pattern any
+	Handler EphemeralEditHandler
+	Filters []Filter
+}
+
+type ephemeralDeleteHandle struct {
+	baseHandle
+	Handler EphemeralDeleteHandler
+}
+
+type ephemeralCallbackHandle struct {
+	baseHandle
+	Pattern any
+	Handler EphemeralCallbackHandler
+	Filters []Filter
+}
+
 type e2eHandle struct {
 	baseHandle
 	Handler E2EHandler
@@ -949,24 +1019,29 @@ type UpdateDispatcher struct {
 	albumHandles          map[int][]*albumHandle
 	rawHandles            map[int][]*rawHandle
 	e2eHandles            map[int][]*e2eHandle
-	activeAlbums          map[int64]*albumBox
-	logger                Logger
-	openChats             map[int64]*openChat
-	nextUpdatesDeadline   time.Time
-	lastUpdateTimeNano    atomic.Int64
-	state                 UpdateState
-	channelStates         map[int64]*channelState
-	processedMsgLRU       *shardedLRU
-	recoveringDifference  bool
-	recoveringChannels    map[int64]bool
-	stopChan              chan struct{}
-	stopMu                sync.Mutex
-	patternCache          *patternCache
-	middlewareManager     *middlewareManager
-	globalPtsBox          *counterBox
-	globalQtsBox          *counterBox
-	channelPtsBoxes       map[int64]*counterBox
-	channelGapFetcher     func(channelID int64, from, target int32)
+
+	ephemeralMessageHandles  map[int][]*ephemeralMessageHandle
+	ephemeralEditHandles     map[int][]*ephemeralEditHandle
+	ephemeralDeleteHandles   map[int][]*ephemeralDeleteHandle
+	ephemeralCallbackHandles map[int][]*ephemeralCallbackHandle
+	activeAlbums             map[int64]*albumBox
+	logger                   Logger
+	openChats                map[int64]*openChat
+	nextUpdatesDeadline      time.Time
+	lastUpdateTimeNano       atomic.Int64
+	state                    UpdateState
+	channelStates            map[int64]*channelState
+	processedMsgLRU          *shardedLRU
+	recoveringDifference     bool
+	recoveringChannels       map[int64]bool
+	stopChan                 chan struct{}
+	stopMu                   sync.Mutex
+	patternCache             *patternCache
+	middlewareManager        *middlewareManager
+	globalPtsBox             *counterBox
+	globalQtsBox             *counterBox
+	channelPtsBoxes          map[int64]*counterBox
+	channelGapFetcher        func(channelID int64, from, target int32)
 }
 
 func (d *UpdateDispatcher) SetPts(pts int32) {
@@ -1116,28 +1191,32 @@ func (d *UpdateDispatcher) TryMarkMessageProcessed(key int64) bool {
 
 func (c *Client) NewUpdateDispatcher(sessionName ...string) {
 	d := &UpdateDispatcher{
-		logger:                c.Log.WithPrefix("gogram " + lp("updates", getVariadic(sessionName, ""))),
-		channelStates:         make(map[int64]*channelState),
-		processedMsgLRU:       newShardedLRU(200000, 32),
-		stopChan:              make(chan struct{}),
-		messageHandles:        make(map[int][]*messageHandle),
-		inlineHandles:         make(map[int][]*inlineHandle),
-		inlineSendHandles:     make(map[int][]*inlineSendHandle),
-		guestChatHandles:      make(map[int][]*guestChatHandle),
-		callbackHandles:       make(map[int][]*callbackHandle),
-		inlineCallbackHandles: make(map[int][]*inlineCallbackHandle),
-		participantHandles:    make(map[int][]*participantHandle),
-		joinRequestHandles:    make(map[int][]*joinRequestHandle),
-		messageEditHandles:    make(map[int][]*messageEditHandle),
-		actionHandles:         make(map[int][]*chatActionHandle),
-		messageDeleteHandles:  make(map[int][]*messageDeleteHandle),
-		albumHandles:          make(map[int][]*albumHandle),
-		rawHandles:            make(map[int][]*rawHandle),
-		e2eHandles:            make(map[int][]*e2eHandle),
-		activeAlbums:          make(map[int64]*albumBox),
-		patternCache:          newPatternCache(),
-		middlewareManager:     &middlewareManager{},
-		channelPtsBoxes:       make(map[int64]*counterBox),
+		logger:                   c.Log.WithPrefix("gogram " + lp("updates", getVariadic(sessionName, ""))),
+		channelStates:            make(map[int64]*channelState),
+		processedMsgLRU:          newShardedLRU(200000, 32),
+		stopChan:                 make(chan struct{}),
+		messageHandles:           make(map[int][]*messageHandle),
+		inlineHandles:            make(map[int][]*inlineHandle),
+		inlineSendHandles:        make(map[int][]*inlineSendHandle),
+		guestChatHandles:         make(map[int][]*guestChatHandle),
+		callbackHandles:          make(map[int][]*callbackHandle),
+		inlineCallbackHandles:    make(map[int][]*inlineCallbackHandle),
+		participantHandles:       make(map[int][]*participantHandle),
+		joinRequestHandles:       make(map[int][]*joinRequestHandle),
+		messageEditHandles:       make(map[int][]*messageEditHandle),
+		actionHandles:            make(map[int][]*chatActionHandle),
+		messageDeleteHandles:     make(map[int][]*messageDeleteHandle),
+		albumHandles:             make(map[int][]*albumHandle),
+		rawHandles:               make(map[int][]*rawHandle),
+		e2eHandles:               make(map[int][]*e2eHandle),
+		ephemeralMessageHandles:  make(map[int][]*ephemeralMessageHandle),
+		ephemeralEditHandles:     make(map[int][]*ephemeralEditHandle),
+		ephemeralDeleteHandles:   make(map[int][]*ephemeralDeleteHandle),
+		ephemeralCallbackHandles: make(map[int][]*ephemeralCallbackHandle),
+		activeAlbums:             make(map[int64]*albumBox),
+		patternCache:             newPatternCache(),
+		middlewareManager:        &middlewareManager{},
+		channelPtsBoxes:          make(map[int64]*counterBox),
 		channelGapFetcher: func(channelID int64, from, target int32) {
 			if c.clientData.disableGapFetch {
 				return
@@ -1218,6 +1297,14 @@ func (c *Client) removeHandle(handle Handle) error {
 		removeHandleFromMap(h, c.dispatcher.inlineSendHandles)
 	case *guestChatHandle:
 		removeHandleFromMap(h, c.dispatcher.guestChatHandles)
+	case *ephemeralMessageHandle:
+		removeHandleFromMap(h, c.dispatcher.ephemeralMessageHandles)
+	case *ephemeralEditHandle:
+		removeHandleFromMap(h, c.dispatcher.ephemeralEditHandles)
+	case *ephemeralDeleteHandle:
+		removeHandleFromMap(h, c.dispatcher.ephemeralDeleteHandles)
+	case *ephemeralCallbackHandle:
+		removeHandleFromMap(h, c.dispatcher.ephemeralCallbackHandles)
 	default:
 		return errors.New("[InvalidHandlerType] handle type not supported")
 	}
@@ -1810,6 +1897,190 @@ func (c *Client) handleGuestChatUpdate(update *UpdateBotGuestChatQuery) {
 				}
 			}
 		}
+	}
+}
+
+func (c *Client) handleEphemeralMessageUpdate(update *UpdateNewEphemeralMessage) {
+	if update == nil || update.Message == nil {
+		return
+	}
+	packed := packEphemeralMessage(c, update.Message, update)
+
+	c.dispatcher.RLock()
+	handles := make(map[int][]*ephemeralMessageHandle)
+	maps.Copy(handles, c.dispatcher.ephemeralMessageHandles)
+	c.dispatcher.RUnlock()
+
+	for group, handlers := range handles {
+		for _, handler := range handlers {
+			if !ephemeralMatch(handler.Pattern, packed.Text(), c) {
+				continue
+			}
+			handle := func(h *ephemeralMessageHandle) error {
+				defer c.NewRecovery()()
+				hf := h.Handler
+				if mm := c.dispatcher.middlewareManager; mm != nil {
+					hf = applyChain(hf, mm.ephemeralMessages())
+				}
+				return hf(packed)
+			}
+
+			if group == DefaultGroup {
+				go func() {
+					if err := handle(handler); err != nil && !errors.Is(err, ErrEndGroup) {
+						c.Log.WithError(err).Error("[EphemeralMessageHandler]")
+					}
+				}()
+			} else {
+				if err := handle(handler); err != nil && errors.Is(err, ErrEndGroup) {
+					break
+				}
+			}
+		}
+	}
+}
+
+func (c *Client) handleEphemeralEditUpdate(update *UpdateEditEphemeralMessage) {
+	if update == nil || update.Message == nil {
+		return
+	}
+	packed := packEphemeralMessage(c, update.Message, update)
+
+	c.dispatcher.RLock()
+	handles := make(map[int][]*ephemeralEditHandle)
+	maps.Copy(handles, c.dispatcher.ephemeralEditHandles)
+	c.dispatcher.RUnlock()
+
+	for group, handlers := range handles {
+		for _, handler := range handlers {
+			if !ephemeralMatch(handler.Pattern, packed.Text(), c) {
+				continue
+			}
+			handle := func(h *ephemeralEditHandle) error {
+				defer c.NewRecovery()()
+				hf := h.Handler
+				if mm := c.dispatcher.middlewareManager; mm != nil {
+					hf = applyChain(hf, mm.ephemeralEdits())
+				}
+				return hf(packed)
+			}
+
+			if group == DefaultGroup {
+				go func() {
+					if err := handle(handler); err != nil && !errors.Is(err, ErrEndGroup) {
+						c.Log.WithError(err).Error("[EphemeralEditHandler]")
+					}
+				}()
+			} else {
+				if err := handle(handler); err != nil && errors.Is(err, ErrEndGroup) {
+					break
+				}
+			}
+		}
+	}
+}
+
+func (c *Client) handleEphemeralDeleteUpdate(update *UpdateDeleteEphemeralMessages) {
+	if update == nil {
+		return
+	}
+	packed := packEphemeralDelete(c, update)
+
+	c.dispatcher.RLock()
+	handles := make(map[int][]*ephemeralDeleteHandle)
+	maps.Copy(handles, c.dispatcher.ephemeralDeleteHandles)
+	c.dispatcher.RUnlock()
+
+	for group, handlers := range handles {
+		for _, handler := range handlers {
+			handle := func(h *ephemeralDeleteHandle) error {
+				defer c.NewRecovery()()
+				hf := h.Handler
+				if mm := c.dispatcher.middlewareManager; mm != nil {
+					hf = applyChain(hf, mm.ephemeralDeletes())
+				}
+				return hf(packed)
+			}
+
+			if group == DefaultGroup {
+				go func() {
+					if err := handle(handler); err != nil && !errors.Is(err, ErrEndGroup) {
+						c.Log.WithError(err).Error("[EphemeralDeleteHandler]")
+					}
+				}()
+			} else {
+				if err := handle(handler); err != nil && errors.Is(err, ErrEndGroup) {
+					break
+				}
+			}
+		}
+	}
+}
+
+func (c *Client) handleEphemeralCallbackUpdate(update *UpdateEphemeralBotCallbackQuery) {
+	if update == nil {
+		return
+	}
+	packed := packEphemeralCallback(c, update)
+
+	c.dispatcher.RLock()
+	handles := make(map[int][]*ephemeralCallbackHandle)
+	maps.Copy(handles, c.dispatcher.ephemeralCallbackHandles)
+	c.dispatcher.RUnlock()
+
+	for group, handlers := range handles {
+		for _, handler := range handlers {
+			if !ephemeralMatch(handler.Pattern, string(packed.Data), c) {
+				continue
+			}
+			handle := func(h *ephemeralCallbackHandle) error {
+				defer c.NewRecovery()()
+				hf := h.Handler
+				if mm := c.dispatcher.middlewareManager; mm != nil {
+					hf = applyChain(hf, mm.ephemeralCallbacks())
+				}
+				return hf(packed)
+			}
+
+			if group == DefaultGroup {
+				go func() {
+					if err := handle(handler); err != nil && !errors.Is(err, ErrEndGroup) {
+						c.Log.WithError(err).Error("[EphemeralCallbackHandler]")
+					}
+				}()
+			} else {
+				if err := handle(handler); err != nil && errors.Is(err, ErrEndGroup) {
+					break
+				}
+			}
+		}
+	}
+}
+
+// ephemeralMatch reuses the callback/message pattern semantics: an empty or
+// wildcard pattern matches everything, a string is treated as an anchored
+// regex, and a *regexp.Regexp is applied directly.
+func ephemeralMatch(pattern any, text string, c *Client) bool {
+	switch p := pattern.(type) {
+	case nil:
+		return true
+	case string:
+		if p == "" || p == string(EventEphemeralMessage) || p == string(EventEphemeralEdit) || p == string(EventEphemeralCallback) {
+			return true
+		}
+		pat := p
+		if !strings.HasPrefix(pat, "^") {
+			pat = "^" + pat
+		}
+		reg, err := c.dispatcher.patternCache.Get(pat)
+		if err != nil {
+			return strings.HasPrefix(text, p)
+		}
+		return reg.MatchString(text)
+	case *regexp.Regexp:
+		return p.MatchString(text)
+	default:
+		return false
 	}
 }
 
@@ -2660,6 +2931,64 @@ func (c *Client) AddInlineSendHandler(handler InlineSendHandler) Handle {
 	return addHandleToMap(c.dispatcher.inlineSendHandles, h)
 }
 
+func (c *Client) AddEphemeralMessageHandler(pattern any, handler EphemeralMessageHandler, filters ...Filter) Handle {
+	c.dispatcher.Lock()
+	defer c.dispatcher.Unlock()
+	handleID := nextHandleID()
+	h := &ephemeralMessageHandle{
+		Pattern:    pattern,
+		Handler:    handler,
+		Filters:    filters,
+		baseHandle: baseHandle{id: handleID, Group: DefaultGroup},
+	}
+	h.onGroupChanged = makeGroupChangeCallback(c.dispatcher.ephemeralMessageHandles, h, handleID, &c.dispatcher.RWMutex)
+	h.onPriorityChanged = makePriorityChangeCallback(c.dispatcher.ephemeralMessageHandles, h, handleID, h.GetGroup, h.GetPriority, &c.dispatcher.RWMutex)
+	return addHandleToMap(c.dispatcher.ephemeralMessageHandles, h)
+}
+
+func (c *Client) AddEphemeralEditHandler(pattern any, handler EphemeralEditHandler, filters ...Filter) Handle {
+	c.dispatcher.Lock()
+	defer c.dispatcher.Unlock()
+	handleID := nextHandleID()
+	h := &ephemeralEditHandle{
+		Pattern:    pattern,
+		Handler:    handler,
+		Filters:    filters,
+		baseHandle: baseHandle{id: handleID, Group: DefaultGroup},
+	}
+	h.onGroupChanged = makeGroupChangeCallback(c.dispatcher.ephemeralEditHandles, h, handleID, &c.dispatcher.RWMutex)
+	h.onPriorityChanged = makePriorityChangeCallback(c.dispatcher.ephemeralEditHandles, h, handleID, h.GetGroup, h.GetPriority, &c.dispatcher.RWMutex)
+	return addHandleToMap(c.dispatcher.ephemeralEditHandles, h)
+}
+
+func (c *Client) AddEphemeralDeleteHandler(handler EphemeralDeleteHandler) Handle {
+	c.dispatcher.Lock()
+	defer c.dispatcher.Unlock()
+	handleID := nextHandleID()
+	h := &ephemeralDeleteHandle{
+		Handler:    handler,
+		baseHandle: baseHandle{id: handleID, Group: DefaultGroup},
+	}
+	h.onGroupChanged = makeGroupChangeCallback(c.dispatcher.ephemeralDeleteHandles, h, handleID, &c.dispatcher.RWMutex)
+	h.onPriorityChanged = makePriorityChangeCallback(c.dispatcher.ephemeralDeleteHandles, h, handleID, h.GetGroup, h.GetPriority, &c.dispatcher.RWMutex)
+	return addHandleToMap(c.dispatcher.ephemeralDeleteHandles, h)
+}
+
+func (c *Client) AddEphemeralCallbackHandler(pattern any, handler EphemeralCallbackHandler, filters ...Filter) Handle {
+	c.dispatcher.Lock()
+	defer c.dispatcher.Unlock()
+	handleID := nextHandleID()
+	h := &ephemeralCallbackHandle{
+		Pattern:    pattern,
+		Handler:    handler,
+		Filters:    filters,
+		baseHandle: baseHandle{id: handleID, Group: DefaultGroup},
+	}
+	h.onGroupChanged = makeGroupChangeCallback(c.dispatcher.ephemeralCallbackHandles, h, handleID, &c.dispatcher.RWMutex)
+	h.onPriorityChanged = makePriorityChangeCallback(c.dispatcher.ephemeralCallbackHandles, h, handleID, h.GetGroup, h.GetPriority, &c.dispatcher.RWMutex)
+	return addHandleToMap(c.dispatcher.ephemeralCallbackHandles, h)
+}
+
 func (c *Client) AddCallbackHandler(pattern any, handler CallbackHandler, filters ...Filter) Handle {
 	c.dispatcher.Lock()
 	defer c.dispatcher.Unlock()
@@ -2957,6 +3286,14 @@ func (c *Client) dispatchUpdate(update Update) {
 		go c.HandleSecretChatUpdate(upd)
 	case *UpdateEncryption:
 		go c.HandleSecretChatUpdate(upd)
+	case *UpdateNewEphemeralMessage:
+		go c.handleEphemeralMessageUpdate(upd)
+	case *UpdateEditEphemeralMessage:
+		go c.handleEphemeralEditUpdate(upd)
+	case *UpdateDeleteEphemeralMessages:
+		go c.handleEphemeralDeleteUpdate(upd)
+	case *UpdateEphemeralBotCallbackQuery:
+		go c.handleEphemeralCallbackUpdate(upd)
 	}
 
 	go c.handleRawUpdate(update)
@@ -3822,6 +4159,9 @@ var handlerTypes = map[string]string{
 	"func(*telegram.ParticipantUpdate) error":       "participant",
 	"func(*telegram.JoinRequestUpdate) error":       "joinrequest",
 	"func(telegram.Update, *telegram.Client) error": "raw",
+	"func(*telegram.EphemeralMessageEvent) error":   "ephemeralmessage",
+	"func(*telegram.EphemeralDeleteMessage) error":  "ephemeraldelete",
+	"func(*telegram.EphemeralCallbackQuery) error":  "ephemeralcallback",
 }
 
 // On registers an event handler with flexible pattern matching.
@@ -3971,6 +4311,30 @@ func (c *Client) On(args ...any) Handle {
 		}
 		c.Log.Error("On(joinrequest): invalid handler type %T, expected func(*JoinRequestUpdate) error", handler)
 
+	case "ephemeralmessage", "ephemeral":
+		if h, ok := handler.(func(m *EphemeralMessageEvent) error); ok {
+			return c.AddEphemeralMessageHandler(info.pattern, h, filters...)
+		}
+		c.Log.Error("On(ephemeralmessage): invalid handler type %T, expected func(*EphemeralMessageEvent) error", handler)
+
+	case "ephemeraledit":
+		if h, ok := handler.(func(m *EphemeralMessageEvent) error); ok {
+			return c.AddEphemeralEditHandler(info.pattern, h, filters...)
+		}
+		c.Log.Error("On(ephemeraledit): invalid handler type %T, expected func(*EphemeralMessageEvent) error", handler)
+
+	case "ephemeraldelete":
+		if h, ok := handler.(func(m *EphemeralDeleteMessage) error); ok {
+			return c.AddEphemeralDeleteHandler(h)
+		}
+		c.Log.Error("On(ephemeraldelete): invalid handler type %T, expected func(*EphemeralDeleteMessage) error", handler)
+
+	case "ephemeralcallback":
+		if h, ok := handler.(func(m *EphemeralCallbackQuery) error); ok {
+			return c.AddEphemeralCallbackHandler(info.pattern, h, filters...)
+		}
+		c.Log.Error("On(ephemeralcallback): invalid handler type %T, expected func(*EphemeralCallbackQuery) error", handler)
+
 	case "raw", "*":
 		if h, ok := handler.(func(m Update, c *Client) error); ok {
 			return c.AddRawHandler(nil, h)
@@ -4007,6 +4371,12 @@ func (c *Client) On(args ...any) Handle {
 			return c.AddParticipantHandler(h)
 		case func(m *JoinRequestUpdate) error:
 			return c.AddJoinRequestHandler(h)
+		case func(m *EphemeralMessageEvent) error:
+			return c.AddEphemeralMessageHandler(string(OnEphemeralMessage), h, filters...)
+		case func(m *EphemeralDeleteMessage) error:
+			return c.AddEphemeralDeleteHandler(h)
+		case func(m *EphemeralCallbackQuery) error:
+			return c.AddEphemeralCallbackHandler(string(OnEphemeralCallback), h, filters...)
 		case func(m Update, c *Client) error:
 			return c.AddRawHandler(nil, h)
 		default:
@@ -4087,6 +4457,18 @@ func Use[H any](c *Client, middlewares ...func(H) H) {
 	case RawHandler:
 		for _, mw := range middlewares {
 			mm.raw = append(mm.raw, any(mw).(func(RawHandler) RawHandler))
+		}
+	case EphemeralMessageHandler:
+		for _, mw := range middlewares {
+			mm.ephemeralMessage = append(mm.ephemeralMessage, any(mw).(func(EphemeralMessageHandler) EphemeralMessageHandler))
+		}
+	case EphemeralDeleteHandler:
+		for _, mw := range middlewares {
+			mm.ephemeralDelete = append(mm.ephemeralDelete, any(mw).(func(EphemeralDeleteHandler) EphemeralDeleteHandler))
+		}
+	case EphemeralCallbackHandler:
+		for _, mw := range middlewares {
+			mm.ephemeralCallback = append(mm.ephemeralCallback, any(mw).(func(EphemeralCallbackHandler) EphemeralCallbackHandler))
 		}
 	default:
 		panic(fmt.Sprintf("telegram.Use: unsupported handler type %T", zero))
@@ -4181,6 +4563,31 @@ func (c *Client) OnParticipant(handler func(m *ParticipantUpdate) error) Handle 
 // OnJoinRequest registers a join request handler and returns a handle
 func (c *Client) OnJoinRequest(handler func(m *JoinRequestUpdate) error) Handle {
 	return c.AddJoinRequestHandler(handler)
+}
+
+// OnEphemeralMessage registers a handler for new ephemeral messages
+// (updateNewEphemeralMessage). An empty pattern matches every message.
+func (c *Client) OnEphemeralMessage(pattern any, handler EphemeralMessageHandler, filters ...Filter) Handle {
+	return c.AddEphemeralMessageHandler(normalizePattern(pattern, EventEphemeralMessage), handler, filters...)
+}
+
+// OnEphemeralEdit registers a handler for edited ephemeral messages
+// (updateEditEphemeralMessage).
+func (c *Client) OnEphemeralEdit(pattern any, handler EphemeralEditHandler, filters ...Filter) Handle {
+	return c.AddEphemeralEditHandler(normalizePattern(pattern, EventEphemeralEdit), handler, filters...)
+}
+
+// OnEphemeralDelete registers a handler for ephemeral message deletions
+// (updateDeleteEphemeralMessages).
+func (c *Client) OnEphemeralDelete(handler EphemeralDeleteHandler) Handle {
+	return c.AddEphemeralDeleteHandler(handler)
+}
+
+// OnEphemeralCallback registers a handler for ephemeral inline button presses
+// (updateEphemeralBotCallbackQuery). The pattern is matched against the button
+// data, mirroring OnCallback.
+func (c *Client) OnEphemeralCallback(pattern any, handler EphemeralCallbackHandler, filters ...Filter) Handle {
+	return c.AddEphemeralCallbackHandler(normalizePattern(pattern, EventEphemeralCallback), handler, filters...)
 }
 
 // OnRaw registers a raw handler and returns a handle.
