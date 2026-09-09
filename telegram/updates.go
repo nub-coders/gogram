@@ -119,6 +119,22 @@ type middlewareManager struct {
 	ephemeralEdit     []func(EphemeralEditHandler) EphemeralEditHandler
 	ephemeralDelete   []func(EphemeralDeleteHandler) EphemeralDeleteHandler
 	ephemeralCallback []func(EphemeralCallbackHandler) EphemeralCallbackHandler
+
+	businessMessage []func(BusinessMessageHandler) BusinessMessageHandler
+	businessEdit    []func(BusinessEditHandler) BusinessEditHandler
+	businessDelete  []func(BusinessDeleteHandler) BusinessDeleteHandler
+	businessConnect []func(BusinessConnectHandler) BusinessConnectHandler
+	preCheckout     []func(PreCheckoutHandler) PreCheckoutHandler
+	shipping        []func(ShippingHandler) ShippingHandler
+	reaction        []func(MessageReactionHandler) MessageReactionHandler
+	reactionCount   []func(MessageReactionCountHandler) MessageReactionCountHandler
+	botStopped      []func(BotStoppedHandler) BotStoppedHandler
+	chatBoost       []func(ChatBoostHandler) ChatBoostHandler
+	paidMedia       []func(PurchasedPaidMediaHandler) PurchasedPaidMediaHandler
+	starsSub        []func(StarsSubscriptionHandler) StarsSubscriptionHandler
+	chatParticipant []func(ChatParticipantHandler) ChatParticipantHandler
+	pollVote        []func(PollVoteHandler) PollVoteHandler
+	poll            []func(PollHandler) PollHandler
 }
 
 func (mm *middlewareManager) Use(middleware Middleware) {
@@ -221,6 +237,141 @@ func (mm *middlewareManager) ephemeralCallbacks() []func(EphemeralCallbackHandle
 	mm.RLock()
 	defer mm.RUnlock()
 	return slices.Clone(mm.ephemeralCallback)
+}
+
+func (mm *middlewareManager) businessMessages() []func(BusinessMessageHandler) BusinessMessageHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.businessMessage)
+}
+
+func (mm *middlewareManager) businessEdits() []func(BusinessEditHandler) BusinessEditHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.businessEdit)
+}
+
+func (mm *middlewareManager) businessDeletes() []func(BusinessDeleteHandler) BusinessDeleteHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.businessDelete)
+}
+
+func (mm *middlewareManager) businessConnects() []func(BusinessConnectHandler) BusinessConnectHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.businessConnect)
+}
+
+func (mm *middlewareManager) preCheckouts() []func(PreCheckoutHandler) PreCheckoutHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.preCheckout)
+}
+
+func (mm *middlewareManager) shippings() []func(ShippingHandler) ShippingHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.shipping)
+}
+
+func (mm *middlewareManager) reactions() []func(MessageReactionHandler) MessageReactionHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.reaction)
+}
+
+func (mm *middlewareManager) reactionCounts() []func(MessageReactionCountHandler) MessageReactionCountHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.reactionCount)
+}
+
+func (mm *middlewareManager) botStoppeds() []func(BotStoppedHandler) BotStoppedHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.botStopped)
+}
+
+func (mm *middlewareManager) chatBoosts() []func(ChatBoostHandler) ChatBoostHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.chatBoost)
+}
+
+func (mm *middlewareManager) paidMedias() []func(PurchasedPaidMediaHandler) PurchasedPaidMediaHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.paidMedia)
+}
+
+func (mm *middlewareManager) starsSubs() []func(StarsSubscriptionHandler) StarsSubscriptionHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.starsSub)
+}
+
+func (mm *middlewareManager) chatParticipants() []func(ChatParticipantHandler) ChatParticipantHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.chatParticipant)
+}
+
+func (mm *middlewareManager) pollVotes() []func(PollVoteHandler) PollVoteHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.pollVote)
+}
+
+func (mm *middlewareManager) polls() []func(PollHandler) PollHandler {
+	if mm == nil {
+		return nil
+	}
+	mm.RLock()
+	defer mm.RUnlock()
+	return slices.Clone(mm.poll)
 }
 
 // HandlerGroup represents a group of handlers with shared configuration
@@ -1024,24 +1175,41 @@ type UpdateDispatcher struct {
 	ephemeralEditHandles     map[int][]*ephemeralEditHandle
 	ephemeralDeleteHandles   map[int][]*ephemeralDeleteHandle
 	ephemeralCallbackHandles map[int][]*ephemeralCallbackHandle
-	activeAlbums             map[int64]*albumBox
-	logger                   Logger
-	openChats                map[int64]*openChat
-	nextUpdatesDeadline      time.Time
-	lastUpdateTimeNano       atomic.Int64
-	state                    UpdateState
-	channelStates            map[int64]*channelState
-	processedMsgLRU          *shardedLRU
-	recoveringDifference     bool
-	recoveringChannels       map[int64]bool
-	stopChan                 chan struct{}
-	stopMu                   sync.Mutex
-	patternCache             *patternCache
-	middlewareManager        *middlewareManager
-	globalPtsBox             *counterBox
-	globalQtsBox             *counterBox
-	channelPtsBoxes          map[int64]*counterBox
-	channelGapFetcher        func(channelID int64, from, target int32)
+
+	businessMessageHandles map[int][]*botUpdateHandle[BusinessMessageHandler]
+	businessEditHandles    map[int][]*botUpdateHandle[BusinessEditHandler]
+	businessDeleteHandles  map[int][]*botUpdateHandle[BusinessDeleteHandler]
+	businessConnectHandles map[int][]*botUpdateHandle[BusinessConnectHandler]
+	preCheckoutHandles     map[int][]*botUpdateHandle[PreCheckoutHandler]
+	shippingHandles        map[int][]*botUpdateHandle[ShippingHandler]
+	reactionHandles        map[int][]*botUpdateHandle[MessageReactionHandler]
+	reactionCountHandles   map[int][]*botUpdateHandle[MessageReactionCountHandler]
+	botStoppedHandles      map[int][]*botUpdateHandle[BotStoppedHandler]
+	chatBoostHandles       map[int][]*botUpdateHandle[ChatBoostHandler]
+	paidMediaHandles       map[int][]*botUpdateHandle[PurchasedPaidMediaHandler]
+	starsSubHandles        map[int][]*botUpdateHandle[StarsSubscriptionHandler]
+	chatParticipantHandles map[int][]*botUpdateHandle[ChatParticipantHandler]
+	pollVoteHandles        map[int][]*botUpdateHandle[PollVoteHandler]
+	pollHandles            map[int][]*botUpdateHandle[PollHandler]
+
+	activeAlbums         map[int64]*albumBox
+	logger               Logger
+	openChats            map[int64]*openChat
+	nextUpdatesDeadline  time.Time
+	lastUpdateTimeNano   atomic.Int64
+	state                UpdateState
+	channelStates        map[int64]*channelState
+	processedMsgLRU      *shardedLRU
+	recoveringDifference bool
+	recoveringChannels   map[int64]bool
+	stopChan             chan struct{}
+	stopMu               sync.Mutex
+	patternCache         *patternCache
+	middlewareManager    *middlewareManager
+	globalPtsBox         *counterBox
+	globalQtsBox         *counterBox
+	channelPtsBoxes      map[int64]*counterBox
+	channelGapFetcher    func(channelID int64, from, target int32)
 }
 
 func (d *UpdateDispatcher) SetPts(pts int32) {
@@ -1213,6 +1381,21 @@ func (c *Client) NewUpdateDispatcher(sessionName ...string) {
 		ephemeralEditHandles:     make(map[int][]*ephemeralEditHandle),
 		ephemeralDeleteHandles:   make(map[int][]*ephemeralDeleteHandle),
 		ephemeralCallbackHandles: make(map[int][]*ephemeralCallbackHandle),
+		businessMessageHandles:   make(map[int][]*botUpdateHandle[BusinessMessageHandler]),
+		businessEditHandles:      make(map[int][]*botUpdateHandle[BusinessEditHandler]),
+		businessDeleteHandles:    make(map[int][]*botUpdateHandle[BusinessDeleteHandler]),
+		businessConnectHandles:   make(map[int][]*botUpdateHandle[BusinessConnectHandler]),
+		preCheckoutHandles:       make(map[int][]*botUpdateHandle[PreCheckoutHandler]),
+		shippingHandles:          make(map[int][]*botUpdateHandle[ShippingHandler]),
+		reactionHandles:          make(map[int][]*botUpdateHandle[MessageReactionHandler]),
+		reactionCountHandles:     make(map[int][]*botUpdateHandle[MessageReactionCountHandler]),
+		botStoppedHandles:        make(map[int][]*botUpdateHandle[BotStoppedHandler]),
+		chatBoostHandles:         make(map[int][]*botUpdateHandle[ChatBoostHandler]),
+		paidMediaHandles:         make(map[int][]*botUpdateHandle[PurchasedPaidMediaHandler]),
+		starsSubHandles:          make(map[int][]*botUpdateHandle[StarsSubscriptionHandler]),
+		chatParticipantHandles:   make(map[int][]*botUpdateHandle[ChatParticipantHandler]),
+		pollVoteHandles:          make(map[int][]*botUpdateHandle[PollVoteHandler]),
+		pollHandles:              make(map[int][]*botUpdateHandle[PollHandler]),
 		activeAlbums:             make(map[int64]*albumBox),
 		patternCache:             newPatternCache(),
 		middlewareManager:        &middlewareManager{},
@@ -1305,6 +1488,36 @@ func (c *Client) removeHandle(handle Handle) error {
 		removeHandleFromMap(h, c.dispatcher.ephemeralDeleteHandles)
 	case *ephemeralCallbackHandle:
 		removeHandleFromMap(h, c.dispatcher.ephemeralCallbackHandles)
+	case *botUpdateHandle[BusinessMessageHandler]:
+		removeHandleFromMap(h, c.dispatcher.businessMessageHandles)
+	case *botUpdateHandle[BusinessEditHandler]:
+		removeHandleFromMap(h, c.dispatcher.businessEditHandles)
+	case *botUpdateHandle[BusinessDeleteHandler]:
+		removeHandleFromMap(h, c.dispatcher.businessDeleteHandles)
+	case *botUpdateHandle[BusinessConnectHandler]:
+		removeHandleFromMap(h, c.dispatcher.businessConnectHandles)
+	case *botUpdateHandle[PreCheckoutHandler]:
+		removeHandleFromMap(h, c.dispatcher.preCheckoutHandles)
+	case *botUpdateHandle[ShippingHandler]:
+		removeHandleFromMap(h, c.dispatcher.shippingHandles)
+	case *botUpdateHandle[MessageReactionHandler]:
+		removeHandleFromMap(h, c.dispatcher.reactionHandles)
+	case *botUpdateHandle[MessageReactionCountHandler]:
+		removeHandleFromMap(h, c.dispatcher.reactionCountHandles)
+	case *botUpdateHandle[BotStoppedHandler]:
+		removeHandleFromMap(h, c.dispatcher.botStoppedHandles)
+	case *botUpdateHandle[ChatBoostHandler]:
+		removeHandleFromMap(h, c.dispatcher.chatBoostHandles)
+	case *botUpdateHandle[PurchasedPaidMediaHandler]:
+		removeHandleFromMap(h, c.dispatcher.paidMediaHandles)
+	case *botUpdateHandle[StarsSubscriptionHandler]:
+		removeHandleFromMap(h, c.dispatcher.starsSubHandles)
+	case *botUpdateHandle[ChatParticipantHandler]:
+		removeHandleFromMap(h, c.dispatcher.chatParticipantHandles)
+	case *botUpdateHandle[PollVoteHandler]:
+		removeHandleFromMap(h, c.dispatcher.pollVoteHandles)
+	case *botUpdateHandle[PollHandler]:
+		removeHandleFromMap(h, c.dispatcher.pollHandles)
 	default:
 		return errors.New("[InvalidHandlerType] handle type not supported")
 	}
@@ -3294,6 +3507,36 @@ func (c *Client) dispatchUpdate(update Update) {
 		go c.handleEphemeralDeleteUpdate(upd)
 	case *UpdateEphemeralBotCallbackQuery:
 		go c.handleEphemeralCallbackUpdate(upd)
+	case *UpdateBotNewBusinessMessage:
+		go c.handleBusinessMessageUpdate(upd)
+	case *UpdateBotEditBusinessMessage:
+		go c.handleBusinessEditUpdate(upd)
+	case *UpdateBotDeleteBusinessMessage:
+		go c.handleBusinessDeleteUpdate(upd)
+	case *UpdateBotBusinessConnect:
+		go c.handleBusinessConnectUpdate(upd)
+	case *UpdateBotPrecheckoutQuery:
+		go c.handlePreCheckoutUpdate(upd)
+	case *UpdateBotShippingQuery:
+		go c.handleShippingUpdate(upd)
+	case *UpdateBotMessageReaction:
+		go c.handleMessageReactionUpdate(upd)
+	case *UpdateBotMessageReactions:
+		go c.handleMessageReactionCountUpdate(upd)
+	case *UpdateBotStopped:
+		go c.handleBotStoppedUpdate(upd)
+	case *UpdateBotChatBoost:
+		go c.handleChatBoostUpdate(upd)
+	case *UpdateBotPurchasedPaidMedia:
+		go c.handlePurchasedPaidMediaUpdate(upd)
+	case *UpdateBotStarsSubscription:
+		go c.handleStarsSubscriptionUpdate(upd)
+	case *UpdateChatParticipant:
+		go c.handleChatParticipantUpdate(upd)
+	case *UpdateMessagePollVote:
+		go c.handlePollVoteUpdate(upd)
+	case *UpdateMessagePoll:
+		go c.handlePollUpdate(upd)
 	}
 
 	go c.handleRawUpdate(update)
@@ -3433,12 +3676,41 @@ func extractUpdateMeta(update Update) updateMeta {
 	case *UpdateChannelParticipant:
 		meta.qts = upd.Qts
 		meta.channel = upd.ChannelID
+	case *UpdateChatParticipant:
+		meta.qts = upd.Qts
 	case *UpdateBotChatInviteRequester:
 		meta.qts = upd.Qts
 		meta.channel = getChannelIDFromPeer(upd.Peer)
 	case *UpdateNewEncryptedMessage:
 		meta.qts = upd.Qts
 	case *UpdateBotGuestChatQuery:
+		meta.qts = upd.Qts
+	case *UpdateBotNewBusinessMessage:
+		meta.qts = upd.Qts
+	case *UpdateBotEditBusinessMessage:
+		meta.qts = upd.Qts
+	case *UpdateBotDeleteBusinessMessage:
+		meta.qts = upd.Qts
+	case *UpdateBotBusinessConnect:
+		meta.qts = upd.Qts
+	case *UpdateBotMessageReaction:
+		meta.qts = upd.Qts
+		meta.channel = getChannelIDFromPeer(upd.Peer)
+	case *UpdateBotMessageReactions:
+		meta.qts = upd.Qts
+		meta.channel = getChannelIDFromPeer(upd.Peer)
+	case *UpdateBotChatBoost:
+		meta.qts = upd.Qts
+		meta.channel = getChannelIDFromPeer(upd.Peer)
+	case *UpdateBotStopped:
+		meta.qts = upd.Qts
+	case *UpdateBotPurchasedPaidMedia:
+		meta.qts = upd.Qts
+	case *UpdateBotStarsSubscription:
+		meta.qts = upd.Qts
+	case *UpdateMessagePollVote:
+		meta.qts = upd.Qts
+	case *UpdateManagedBot:
 		meta.qts = upd.Qts
 	case *UpdateBotInlineSend:
 	}
