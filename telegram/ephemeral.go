@@ -32,8 +32,11 @@ type EphemeralOptions struct {
 	// Anchor pins the message to the bottom of the chat for the receiver.
 	Anchor bool
 
-	InvertMedia bool // Display media below the caption instead of above
-	NoForwards  bool // Restrict forwarding and saving
+	InvertMedia            bool // Display media below the caption instead of above
+	NoForwards             bool // Restrict forwarding and saving
+	// ShowCaptionAboveMedia renders the caption above the attached media.
+	// Applies only to editEphemeralMessageCaption (Bot API 10.3).
+	ShowCaptionAboveMedia bool
 
 	Entities    []MessageEntity
 	Media       InputMedia
@@ -141,15 +144,16 @@ func (c *Client) EditEphemeral(receiver any, messageID int32, text string, opts 
 	}
 
 	params := &EphemeralEditMessageParams{
-		InvertMedia: o.InvertMedia,
-		Welcome:     o.Welcome,
-		Peer:        peer,
-		ReceiverID:  user,
-		ID:          messageID,
-		Message:     text,
-		Media:       o.Media,
-		Entities:    o.Entities,
-		ReplyMarkup: o.ReplyMarkup,
+		InvertMedia:           o.InvertMedia,
+		Welcome:               o.Welcome,
+		ShowCaptionAboveMedia: o.ShowCaptionAboveMedia,
+		Peer:                  peer,
+		ReceiverID:            user,
+		ID:                    messageID,
+		Message:               text,
+		Media:                 o.Media,
+		Entities:              o.Entities,
+		ReplyMarkup:           o.ReplyMarkup,
 	}
 
 	if o.Rich != nil {

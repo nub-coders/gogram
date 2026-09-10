@@ -233,6 +233,34 @@ func (m *NewMessage) IsService() bool {
 	return isService
 }
 
+// CommunityChatJoined returns the service-message action when a user joins the
+// chat via a community link (Bot API 10.3: community_chat_joined). The second
+// return value is false when the message is not this type of service message.
+func (m *NewMessage) CommunityChatJoined() (*MessageActionChatJoinedViaCommunity, bool) {
+	svc, ok := m.OriginalUpdate.(*MessageService)
+	if !ok {
+		return nil, false
+	}
+	action, ok := svc.Action.(*MessageActionChatJoinedViaCommunity)
+	return action, ok
+}
+
+// StarGiftUnique returns the service-message action for a unique collectible
+// star gift event (Bot API 10.3: UniqueGiftInfo). The returned struct exposes:
+//   - .Gift        — the StarGiftUnique value
+//   - .Message     — optional text + entities (text / entities in Bot API)
+//   - .NameHidden  — whether the sender's name is hidden (is_private in Bot API)
+//
+// The second return value is false when the message is not this type.
+func (m *NewMessage) StarGiftUnique() (*MessageActionStarGiftUnique, bool) {
+	svc, ok := m.OriginalUpdate.(*MessageService)
+	if !ok {
+		return nil, false
+	}
+	action, ok := svc.Action.(*MessageActionStarGiftUnique)
+	return action, ok
+}
+
 func (m *NewMessage) IsOutgoing() bool {
 	return m.Message.Out
 }

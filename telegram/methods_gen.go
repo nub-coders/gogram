@@ -7981,16 +7981,17 @@ func (c *Client) EphemeralDeleteWelcomeMessage(peer InputPeer, id int32) (bool, 
 }
 
 type EphemeralEditMessageParams struct {
-	InvertMedia bool      `tl:"flag:5,encoded_in_bitflags"`
-	Welcome     bool      `tl:"flag:6,encoded_in_bitflags"`
-	Peer        InputPeer `tl:"flag:7"`
-	ReceiverID  InputUser
-	ID          int32
-	Message     string           `tl:"flag:0"`
-	Media       InputMedia       `tl:"flag:3"`
-	Entities    []MessageEntity  `tl:"flag:1"`
-	ReplyMarkup ReplyMarkup      `tl:"flag:2"`
-	RichMessage InputRichMessage `tl:"flag:4"`
+	InvertMedia            bool      `tl:"flag:5,encoded_in_bitflags"`
+	Welcome                bool      `tl:"flag:6,encoded_in_bitflags"`
+	ShowCaptionAboveMedia  bool      `tl:"flag:8,encoded_in_bitflags"` // Bot API 10.3: show caption above media
+	Peer                   InputPeer `tl:"flag:7"`
+	ReceiverID             InputUser
+	ID                     int32
+	Message                string           `tl:"flag:0"`
+	Media                  InputMedia       `tl:"flag:3"`
+	Entities               []MessageEntity  `tl:"flag:1"`
+	ReplyMarkup            ReplyMarkup      `tl:"flag:2"`
+	RichMessage            InputRichMessage `tl:"flag:4"`
 }
 
 func (*EphemeralEditMessageParams) CRC() uint32 {
